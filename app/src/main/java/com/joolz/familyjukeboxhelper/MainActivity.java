@@ -9,8 +9,13 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.media.AudioAttributes;
 import android.media.AudioDeviceInfo;
+import android.media.AudioFormat;
 import android.media.AudioManager;
+import android.media.ToneGenerator;
+import android.media.AudioTrack;
+import android.media.MediaPlayer;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -109,6 +114,10 @@ public class MainActivity extends Activity {
         sendButton.setText("Send status to jukebox");
         layout.addView(sendButton);
 
+        Button testToneButton = new Button(this);
+        testToneButton.setText("Play local test tone");
+        layout.addView(testToneButton);
+
         reportView = new TextView(this);
         reportView.setTextSize(15);
         reportView.setTextIsSelectable(true);
@@ -126,6 +135,7 @@ public class MainActivity extends Activity {
         refreshButton.setOnClickListener(v -> refreshReport());
         copyButton.setOnClickListener(v -> copyReport());
         sendButton.setOnClickListener(v -> sendStatusToJukebox(true));
+        testToneButton.setOnClickListener(v -> playLocalTestToneFromButton());
 
         ensureBluetoothPermission();
         refreshReport();
@@ -214,7 +224,6 @@ public class MainActivity extends Activity {
                 JSONObject job = data.optJSONObject("job");
 
                 if (job == null) {
-                    writePlayerJobResult("NO JOB at " + currentTimeText());
                     return;
                 }
 
@@ -222,8 +231,10 @@ public class MainActivity extends Activity {
                 String jobType = job.optString("type", "");
 
                 if ("test-sound".equals(jobType) && !jobId.isEmpty()) {
-                    writePlayerJobResult("RECEIVED test-sound job " + jobId + " at " + currentTimeText() + " - no sound played yet");
-                    completeAndroidPlayerJob(jobId);
+                    playTestSoundThenComplete(jobId);
+                } else if ("test-audio-url".equals(jobType) && !jobId.isEmpty()) {
+                    String audioUrl = extractJsonString(responseText, "audioUrl");
+                    playAudioUrlThenComplete(jobId, audioUrl);
                 } else {
                     writePlayerJobResult("UNKNOWN JOB " + jobType + " at " + currentTimeText());
                 }
@@ -232,6 +243,146 @@ public class MainActivity extends Activity {
             }
         }).start();
     }
+
+    private void playLocalTestToneFromButton() {
+        reportView.setText(reportView.getText() + "\n\nPlaying local test tone...");
+
+        new Thread(() -> {
+            try {
+                playGeneratedTestTone();
+
+                runOnUiThread(() ->
+                        reportView.setText(buildReport() + "\n\nLocal test tone: played")
+                );
+            } catch (Exception error) {
+                runOnUiThread(() ->
+                        reportView.setText(buildReport() + "\n\nLocal test tone failed: "
+                                + error.getClass().getName() + ": " + error.getMessage())
+                );
+            }
+        }).start();
+    }
+
+    private void playGeneratedTestTone() throws Exception {
+        final int sampleRate = 44100;
+        final int durationMs = 2500;
+        final double frequencyHz = 880.0;
+        final double volume = 0.75;
+
+        int sampleCount = sampleRate * durationMs / 1000;
+        short[] samples = new short[sampleCount];
+
+        for (int i = 0; i < sampleCount; i++) {
+            double angle = 2.0 * Math.PI * i * frequencyHz / sampleRate;
+            samples[i] = (short) (Math.sin(angle) * Short.MAX_VALUE * volume);
+        }
+
+        AudioTrack audioTrack = new AudioTrack.Builder()
+                .setAudioAttributes(new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build())
+                .setAudioFormat(new AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(sampleRate)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .build())
+                .setBufferSizeInBytes(samples.length * 2)
+                .setTransferMode(AudioTrack.MODE_STATIC)
+                .build();
+
+        try {
+            audioTrack.setVolume(1.0f);
+            audioTrack.write(samples, 0, samples.length);
+            audioTrack.play();
+
+            try {
+                Thread.sleep(durationMs + 300);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+
+            audioTrack.stop();
+        } finally {
+            audioTrack.release();
+        }
+    }
+
+    private String extractJsonString(String json, String key) {
+        try {
+            JSONObject root = new JSONObject(json);
+
+            if (root.has(key)) {
+                return root.optString(key, "");
+            }
+
+            JSONObject job = root.optJSONObject("job");
+
+            if (job != null && job.has(key)) {
+                return job.optString(key, "");
+            }
+        } catch (Exception ignored) {
+        }
+
+        return "";
+    }
+
+
+    private void playAudioUrlThenComplete(String jobId, String audioUrl) {
+        MediaPlayer mediaPlayer = null;
+
+        try {
+            if (audioUrl == null || audioUrl.isEmpty()) {
+                throw new IllegalArgumentException("audioUrl was empty");
+            }
+
+            writePlayerJobResult("PLAYING audio URL job " + jobId + " at " + currentTimeText()
+                    + "\nURL: " + audioUrl);
+
+            mediaPlayer = new MediaPlayer();
+            mediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
+            mediaPlayer.setDataSource(audioUrl);
+            mediaPlayer.prepare();
+            mediaPlayer.start();
+
+            while (mediaPlayer.isPlaying()) {
+                try {
+                    Thread.sleep(250);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+
+            writePlayerJobResult("PLAYED audio URL job " + jobId + " at " + currentTimeText());
+        } catch (Exception error) {
+            writePlayerJobResult("PLAY URL ERROR for job " + jobId + " at " + currentTimeText()
+                    + ": " + error.getClass().getName() + ": " + error.getMessage());
+        } finally {
+            if (mediaPlayer != null) {
+                try {
+                    mediaPlayer.release();
+                } catch (Exception ignored) {
+                }
+            }
+
+            completeAndroidPlayerJob(jobId);
+        }
+    }
+
+    private void playTestSoundThenComplete(String jobId) {
+        try {
+            writePlayerJobResult("PLAYING server test-sound job " + jobId + " at " + currentTimeText());
+            playGeneratedTestTone();
+            writePlayerJobResult("PLAYED server test-sound job " + jobId + " at " + currentTimeText());
+        } catch (Exception error) {
+            writePlayerJobResult("PLAY ERROR for server test-sound job " + jobId + " at " + currentTimeText()
+                    + ": " + error.getClass().getName() + ": " + error.getMessage());
+        } finally {
+            completeAndroidPlayerJob(jobId);
+        }
+    }
+
 
     private void completeAndroidPlayerJob(String jobId) {
         try {
