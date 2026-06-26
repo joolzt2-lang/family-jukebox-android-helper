@@ -12,6 +12,8 @@ import android.content.pm.PackageManager;
 import android.media.AudioDeviceInfo;
 import android.media.AudioManager;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.Bundle;
 import android.widget.Button;
 import android.widget.LinearLayout;
@@ -34,6 +36,18 @@ import java.util.Set;
 public class MainActivity extends Activity {
     private static final int REQUEST_BLUETOOTH_CONNECT = 1001;
     private static final String JUKEBOX_STATUS_URL = "http://192.168.1.252:3010/api/phone-status";
+    private static final long AUTO_SEND_FIRST_DELAY_MS = 2000;
+    private static final long AUTO_SEND_INTERVAL_MS = 10000;
+
+    private final Handler autoSendHandler = new Handler(Looper.getMainLooper());
+    private final Runnable autoSendRunnable = new Runnable() {
+        @Override
+        public void run() {
+            sendStatusToJukebox(false);
+            autoSendHandler.postDelayed(this, AUTO_SEND_INTERVAL_MS);
+        }
+    };
+
     private TextView reportView;
 
     private static class ApprovedSpeaker {
@@ -92,7 +106,7 @@ public class MainActivity extends Activity {
 
         refreshButton.setOnClickListener(v -> refreshReport());
         copyButton.setOnClickListener(v -> copyReport());
-        sendButton.setOnClickListener(v -> sendStatusToJukebox());
+        sendButton.setOnClickListener(v -> sendStatusToJukebox(true));
 
         ensureBluetoothPermission();
         refreshReport();
@@ -114,6 +128,27 @@ public class MainActivity extends Activity {
         refreshReport();
     }
 
+    @Override
+    protected void onResume() {
+        super.onResume();
+        startAutoSend();
+    }
+
+    @Override
+    protected void onPause() {
+        stopAutoSend();
+        super.onPause();
+    }
+
+    private void startAutoSend() {
+        autoSendHandler.removeCallbacks(autoSendRunnable);
+        autoSendHandler.postDelayed(autoSendRunnable, AUTO_SEND_FIRST_DELAY_MS);
+    }
+
+    private void stopAutoSend() {
+        autoSendHandler.removeCallbacks(autoSendRunnable);
+    }
+
     private void refreshReport() {
         String report = buildReport();
         reportView.setText(report);
@@ -126,8 +161,11 @@ public class MainActivity extends Activity {
         Toast.makeText(this, "Report copied", Toast.LENGTH_SHORT).show();
     }
 
-    private void sendStatusToJukebox() {
-        reportView.setText(reportView.getText() + "\n\nSending status to jukebox server...");
+    private void sendStatusToJukebox(boolean updateScreen) {
+        if (updateScreen) {
+            reportView.setText(reportView.getText() + "\n\nSending status to jukebox server...");
+        }
+
         writeSendResult("STARTED sending to " + JUKEBOX_STATUS_URL);
 
         new Thread(() -> {
@@ -153,19 +191,23 @@ public class MainActivity extends Activity {
 
                 writeSendResult("HTTP response code: " + responseCode);
 
-                runOnUiThread(() -> {
-                    if (responseCode >= 200 && responseCode < 300) {
-                        reportView.setText(buildReport() + "\n\nSent to jukebox server: OK");
-                    } else {
-                        reportView.setText(buildReport() + "\n\nSent to jukebox server: failed HTTP " + responseCode);
-                    }
-                });
+                if (updateScreen) {
+                    runOnUiThread(() -> {
+                        if (responseCode >= 200 && responseCode < 300) {
+                            reportView.setText(buildReport() + "\n\nSent to jukebox server: OK");
+                        } else {
+                            reportView.setText(buildReport() + "\n\nSent to jukebox server: failed HTTP " + responseCode);
+                        }
+                    });
+                }
             } catch (Exception error) {
                 writeSendResult("ERROR: " + error.getClass().getName() + ": " + error.getMessage());
 
-                runOnUiThread(() ->
-                        reportView.setText(buildReport() + "\n\nSent to jukebox server: failed - " + error.getMessage())
-                );
+                if (updateScreen) {
+                    runOnUiThread(() ->
+                            reportView.setText(buildReport() + "\n\nSent to jukebox server: failed - " + error.getMessage())
+                    );
+                }
             }
         }).start();
     }
