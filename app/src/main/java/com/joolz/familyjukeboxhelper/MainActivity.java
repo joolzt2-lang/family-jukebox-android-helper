@@ -64,8 +64,8 @@ public class MainActivity extends Activity {
 
     private static final ApprovedSpeaker[] APPROVED_SPEAKERS = {
             new ApprovedSpeaker("Sitting Room", "Echo Dot-QNV", "2C:71:FF:65:15:B6"),
-            new ApprovedSpeaker("Bedroom", "Echo Dot-QCK", "2C:71:FF:74:F0:A3"),
-            new ApprovedSpeaker("Office", "Echo Dot-W4Q", "FC:A1:83:AC:E8:DD"),
+            new ApprovedSpeaker("Office", "Echo Dot-QCK", "2C:71:FF:74:F0:A3"),
+            new ApprovedSpeaker("Bedroom", "Echo Dot-W4Q", "FC:A1:83:AC:E8:DD"),
             new ApprovedSpeaker("Kitchen", "Echo Dot-JAC", "08:A6:BC:88:CA:64"),
             new ApprovedSpeaker("Conservatory", "Echo Dot-HSS", "4C:17:44:8F:15:C9")
     };
