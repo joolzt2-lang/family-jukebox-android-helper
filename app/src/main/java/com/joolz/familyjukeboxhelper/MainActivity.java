@@ -22,7 +22,10 @@ import android.widget.TextView;
 import android.widget.Toast;
 import android.view.ViewGroup;
 
+import java.io.BufferedReader;
 import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -33,11 +36,18 @@ import java.util.Date;
 import java.util.Locale;
 import java.util.Set;
 
+import org.json.JSONObject;
+
 public class MainActivity extends Activity {
     private static final int REQUEST_BLUETOOTH_CONNECT = 1001;
     private static final String JUKEBOX_STATUS_URL = "http://192.168.1.252:3010/api/phone-status";
+    private static final String JUKEBOX_PLAYER_JOB_URL = "http://192.168.1.252:3010/api/android-player/job";
+    private static final String JUKEBOX_PLAYER_COMPLETE_URL = "http://192.168.1.252:3010/api/android-player/job/complete";
+
     private static final long AUTO_SEND_FIRST_DELAY_MS = 2000;
     private static final long AUTO_SEND_INTERVAL_MS = 10000;
+    private static final long PLAYER_JOB_FIRST_DELAY_MS = 3000;
+    private static final long PLAYER_JOB_INTERVAL_MS = 5000;
 
     private final Handler autoSendHandler = new Handler(Looper.getMainLooper());
     private final Runnable autoSendRunnable = new Runnable() {
@@ -45,6 +55,15 @@ public class MainActivity extends Activity {
         public void run() {
             sendStatusToJukebox(false);
             autoSendHandler.postDelayed(this, AUTO_SEND_INTERVAL_MS);
+        }
+    };
+
+    private final Handler playerJobHandler = new Handler(Looper.getMainLooper());
+    private final Runnable playerJobRunnable = new Runnable() {
+        @Override
+        public void run() {
+            pollAndroidPlayerJob();
+            playerJobHandler.postDelayed(this, PLAYER_JOB_INTERVAL_MS);
         }
     };
 
@@ -143,10 +162,21 @@ public class MainActivity extends Activity {
     private void startAutoSend() {
         autoSendHandler.removeCallbacks(autoSendRunnable);
         autoSendHandler.postDelayed(autoSendRunnable, AUTO_SEND_FIRST_DELAY_MS);
+        startPlayerJobPolling();
     }
 
     private void stopAutoSend() {
         autoSendHandler.removeCallbacks(autoSendRunnable);
+        stopPlayerJobPolling();
+    }
+
+    private void startPlayerJobPolling() {
+        playerJobHandler.removeCallbacks(playerJobRunnable);
+        playerJobHandler.postDelayed(playerJobRunnable, PLAYER_JOB_FIRST_DELAY_MS);
+    }
+
+    private void stopPlayerJobPolling() {
+        playerJobHandler.removeCallbacks(playerJobRunnable);
     }
 
     private void refreshReport() {
@@ -159,6 +189,103 @@ public class MainActivity extends Activity {
         ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         clipboard.setPrimaryClip(ClipData.newPlainText("Family Jukebox Helper Report", reportView.getText()));
         Toast.makeText(this, "Report copied", Toast.LENGTH_SHORT).show();
+    }
+
+    private void pollAndroidPlayerJob() {
+        new Thread(() -> {
+            try {
+                URL url = new URL(JUKEBOX_PLAYER_JOB_URL);
+                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(5000);
+                connection.setReadTimeout(5000);
+                connection.setRequestProperty("Accept", "application/json");
+
+                int responseCode = connection.getResponseCode();
+                String responseText = readHttpResponseText(connection);
+                connection.disconnect();
+
+                if (responseCode < 200 || responseCode >= 300) {
+                    writePlayerJobResult("POLL HTTP " + responseCode + " at " + currentTimeText());
+                    return;
+                }
+
+                JSONObject data = new JSONObject(responseText);
+                JSONObject job = data.optJSONObject("job");
+
+                if (job == null) {
+                    writePlayerJobResult("NO JOB at " + currentTimeText());
+                    return;
+                }
+
+                String jobId = job.optString("id", "");
+                String jobType = job.optString("type", "");
+
+                if ("test-sound".equals(jobType) && !jobId.isEmpty()) {
+                    writePlayerJobResult("RECEIVED test-sound job " + jobId + " at " + currentTimeText() + " - no sound played yet");
+                    completeAndroidPlayerJob(jobId);
+                } else {
+                    writePlayerJobResult("UNKNOWN JOB " + jobType + " at " + currentTimeText());
+                }
+            } catch (Exception error) {
+                writePlayerJobResult("POLL ERROR at " + currentTimeText() + ": " + error.getClass().getName() + ": " + error.getMessage());
+            }
+        }).start();
+    }
+
+    private void completeAndroidPlayerJob(String jobId) {
+        try {
+            String json = "{\"jobId\":\"" + jsonEscape(jobId) + "\"}";
+            byte[] body = json.getBytes(StandardCharsets.UTF_8);
+
+            URL url = new URL(JUKEBOX_PLAYER_COMPLETE_URL);
+            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("POST");
+            connection.setConnectTimeout(5000);
+            connection.setReadTimeout(5000);
+            connection.setDoOutput(true);
+            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            connection.setRequestProperty("Accept", "application/json");
+
+            try (OutputStream output = connection.getOutputStream()) {
+                output.write(body);
+            }
+
+            int responseCode = connection.getResponseCode();
+            connection.disconnect();
+
+            writePlayerJobResult("COMPLETED job " + jobId + " HTTP " + responseCode + " at " + currentTimeText());
+        } catch (Exception error) {
+            writePlayerJobResult("COMPLETE ERROR at " + currentTimeText() + ": " + error.getClass().getName() + ": " + error.getMessage());
+        }
+    }
+
+    private String readHttpResponseText(HttpURLConnection connection) throws Exception {
+        int responseCode = connection.getResponseCode();
+        InputStream stream = responseCode >= 400 ? connection.getErrorStream() : connection.getInputStream();
+
+        if (stream == null) {
+            return "";
+        }
+
+        StringBuilder text = new StringBuilder();
+
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+            String line;
+
+            while ((line = reader.readLine()) != null) {
+                text.append(line);
+            }
+        }
+
+        return text.toString();
+    }
+
+    private void writePlayerJobResult(String text) {
+        try (FileOutputStream output = openFileOutput("last-player-job-result.txt", MODE_PRIVATE)) {
+            output.write(text.getBytes(StandardCharsets.UTF_8));
+        } catch (Exception ignored) {
+        }
     }
 
     private void sendStatusToJukebox(boolean updateScreen) {
