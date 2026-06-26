@@ -21,6 +21,10 @@ import android.widget.Toast;
 import android.view.ViewGroup;
 
 import java.io.FileOutputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -29,6 +33,7 @@ import java.util.Set;
 
 public class MainActivity extends Activity {
     private static final int REQUEST_BLUETOOTH_CONNECT = 1001;
+    private static final String JUKEBOX_STATUS_URL = "http://192.168.1.252:3010/api/phone-status";
     private TextView reportView;
 
     private static class ApprovedSpeaker {
@@ -67,6 +72,10 @@ public class MainActivity extends Activity {
         copyButton.setText("Copy report");
         layout.addView(copyButton);
 
+        Button sendButton = new Button(this);
+        sendButton.setText("Send status to jukebox");
+        layout.addView(sendButton);
+
         reportView = new TextView(this);
         reportView.setTextSize(15);
         reportView.setTextIsSelectable(true);
@@ -83,6 +92,7 @@ public class MainActivity extends Activity {
 
         refreshButton.setOnClickListener(v -> refreshReport());
         copyButton.setOnClickListener(v -> copyReport());
+        sendButton.setOnClickListener(v -> sendStatusToJukebox());
 
         ensureBluetoothPermission();
         refreshReport();
@@ -114,6 +124,115 @@ public class MainActivity extends Activity {
         ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         clipboard.setPrimaryClip(ClipData.newPlainText("Family Jukebox Helper Report", reportView.getText()));
         Toast.makeText(this, "Report copied", Toast.LENGTH_SHORT).show();
+    }
+
+    private void sendStatusToJukebox() {
+        reportView.setText(reportView.getText() + "\n\nSending status to jukebox server...");
+        writeSendResult("STARTED sending to " + JUKEBOX_STATUS_URL);
+
+        new Thread(() -> {
+            try {
+                String json = buildPhoneStatusJson();
+                byte[] body = json.getBytes(StandardCharsets.UTF_8);
+
+                URL url = new URL(JUKEBOX_STATUS_URL);
+                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("POST");
+                connection.setConnectTimeout(5000);
+                connection.setReadTimeout(5000);
+                connection.setDoOutput(true);
+                connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                connection.setRequestProperty("Accept", "application/json");
+
+                try (OutputStream output = connection.getOutputStream()) {
+                    output.write(body);
+                }
+
+                int responseCode = connection.getResponseCode();
+                connection.disconnect();
+
+                writeSendResult("HTTP response code: " + responseCode);
+
+                runOnUiThread(() -> {
+                    if (responseCode >= 200 && responseCode < 300) {
+                        reportView.setText(buildReport() + "\n\nSent to jukebox server: OK");
+                    } else {
+                        reportView.setText(buildReport() + "\n\nSent to jukebox server: failed HTTP " + responseCode);
+                    }
+                });
+            } catch (Exception error) {
+                writeSendResult("ERROR: " + error.getClass().getName() + ": " + error.getMessage());
+
+                runOnUiThread(() ->
+                        reportView.setText(buildReport() + "\n\nSent to jukebox server: failed - " + error.getMessage())
+                );
+            }
+        }).start();
+    }
+
+    private void writeSendResult(String text) {
+        try (FileOutputStream output = openFileOutput("last-send-result.txt", MODE_PRIVATE)) {
+            output.write(text.getBytes(StandardCharsets.UTF_8));
+        } catch (Exception ignored) {
+        }
+    }
+
+    private String buildPhoneStatusJson() {
+        StringBuilder json = new StringBuilder();
+        String activeSpeaker = "";
+
+        json.append("{");
+        json.append("\"deviceName\":\"Julian phone\",");
+        json.append("\"serverRole\":\"approved-king-device\",");
+        json.append("\"androidModel\":\"").append(jsonEscape(Build.MODEL)).append("\",");
+        json.append("\"androidRelease\":\"").append(jsonEscape(Build.VERSION.RELEASE)).append("\",");
+        json.append("\"approvedSpeakers\":[");
+
+        BluetoothManager manager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+        BluetoothAdapter adapter = manager != null ? manager.getAdapter() : BluetoothAdapter.getDefaultAdapter();
+        Set<BluetoothDevice> pairedDevices = adapter != null ? adapter.getBondedDevices() : null;
+
+        for (int index = 0; index < APPROVED_SPEAKERS.length; index++) {
+            ApprovedSpeaker speaker = APPROVED_SPEAKERS[index];
+            BluetoothDevice pairedDevice = findPairedDevice(pairedDevices, speaker);
+            boolean paired = pairedDevice != null;
+            boolean active = isAudioProductActive(speaker.bluetoothName);
+
+            if (active) {
+                activeSpeaker = speaker.roomName;
+            }
+
+            if (index > 0) {
+                json.append(",");
+            }
+
+            json.append("{");
+            json.append("\"room\":\"").append(jsonEscape(speaker.roomName)).append("\",");
+            json.append("\"bluetoothName\":\"").append(jsonEscape(speaker.bluetoothName)).append("\",");
+            json.append("\"address\":\"").append(jsonEscape(speaker.address)).append("\",");
+            json.append("\"paired\":").append(paired ? "true" : "false").append(",");
+            json.append("\"active\":").append(active ? "true" : "false");
+            json.append("}");
+        }
+
+        json.append("],");
+        json.append("\"activeSpeaker\":\"").append(jsonEscape(activeSpeaker)).append("\"");
+        json.append("}");
+
+        return json.toString();
+    }
+
+    private String jsonEscape(String value) {
+        if (value == null) {
+            return "";
+        }
+
+        return value
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r")
+                .replace("\t", "\\t");
     }
 
     private String buildReport() {
