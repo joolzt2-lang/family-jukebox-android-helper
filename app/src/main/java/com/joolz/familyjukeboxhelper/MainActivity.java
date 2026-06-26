@@ -162,11 +162,13 @@ public class MainActivity extends Activity {
     }
 
     private void sendStatusToJukebox(boolean updateScreen) {
+        String sendMode = updateScreen ? "MANUAL" : "AUTO";
+
         if (updateScreen) {
             reportView.setText(reportView.getText() + "\n\nSending status to jukebox server...");
         }
 
-        writeSendResult("STARTED sending to " + JUKEBOX_STATUS_URL);
+        writeSendResult(sendMode + " STARTED at " + currentTimeText() + " sending to " + JUKEBOX_STATUS_URL);
 
         new Thread(() -> {
             try {
@@ -189,7 +191,7 @@ public class MainActivity extends Activity {
                 int responseCode = connection.getResponseCode();
                 connection.disconnect();
 
-                writeSendResult("HTTP response code: " + responseCode);
+                writeSendResult(sendMode + " HTTP response code: " + responseCode + " at " + currentTimeText());
 
                 if (updateScreen) {
                     runOnUiThread(() -> {
@@ -201,7 +203,7 @@ public class MainActivity extends Activity {
                     });
                 }
             } catch (Exception error) {
-                writeSendResult("ERROR: " + error.getClass().getName() + ": " + error.getMessage());
+                writeSendResult(sendMode + " ERROR at " + currentTimeText() + ": " + error.getClass().getName() + ": " + error.getMessage());
 
                 if (updateScreen) {
                     runOnUiThread(() ->
@@ -210,6 +212,11 @@ public class MainActivity extends Activity {
                 }
             }
         }).start();
+    }
+
+    private String currentTimeText() {
+        return new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.UK)
+                .format(new java.util.Date());
     }
 
     private void writeSendResult(String text) {
