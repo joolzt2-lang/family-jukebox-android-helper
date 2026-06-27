@@ -22,6 +22,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 
 import org.json.JSONObject;
+import android.media.MediaPlayer;
 
 public class PlayerService extends Service {
     private static final String TAG = "FamilyJukeboxPlayerService";
@@ -32,6 +33,9 @@ public class PlayerService extends Service {
 
     private static final long PLAYER_JOB_FIRST_DELAY_MS = 3000;
     private static final long PLAYER_JOB_INTERVAL_MS = 5000;
+    private final Object playbackLock = new Object();
+    private MediaPlayer currentMediaPlayer = null;
+    private String currentPlaybackJobId = "";
 
     private final Handler playerJobHandler = new Handler(Looper.getMainLooper());
     private final Runnable playerJobRunnable = new Runnable() {
@@ -114,7 +118,8 @@ public class PlayerService extends Service {
             String jobType = job.optString("type", "");
 
             if ("stop-audio".equals(jobType) && !jobId.isEmpty()) {
-                Log.i(TAG, "Completing stop-audio job " + jobId);
+                Log.i(TAG, "Handling stop-audio job " + jobId);
+                stopCurrentPlayback("server stop job " + jobId);
                 completeAndroidPlayerJob(jobId);
                 return;
             }
@@ -123,6 +128,35 @@ public class PlayerService extends Service {
         } catch (Exception error) {
             Log.e(TAG, "Job parse error: " + error.getClass().getName() + ": " + error.getMessage());
         }
+    }
+
+    private void stopCurrentPlayback(String reason) {
+        MediaPlayer playerToStop = null;
+
+        synchronized (playbackLock) {
+            if (currentMediaPlayer != null) {
+                playerToStop = currentMediaPlayer;
+                currentMediaPlayer = null;
+                currentPlaybackJobId = "";
+            }
+        }
+
+        if (playerToStop == null) {
+            Log.i(TAG, "Stop requested but nothing was playing. Reason: " + reason);
+            return;
+        }
+
+        try {
+            playerToStop.stop();
+        } catch (Exception ignored) {
+        }
+
+        try {
+            playerToStop.release();
+        } catch (Exception ignored) {
+        }
+
+        Log.i(TAG, "Stopped playback. Reason: " + reason);
     }
 
     private void completeAndroidPlayerJob(String jobId) {
