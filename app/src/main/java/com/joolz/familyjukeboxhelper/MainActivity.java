@@ -73,6 +73,10 @@ public class MainActivity extends Activity {
     };
 
     private TextView reportView;
+    private final Object playbackLock = new Object();
+    private MediaPlayer currentMediaPlayer = null;
+    private String currentPlaybackJobId = "";
+
 
     private static class ApprovedSpeaker {
         final String roomName;
@@ -235,6 +239,9 @@ public class MainActivity extends Activity {
                 } else if ("test-audio-url".equals(jobType) && !jobId.isEmpty()) {
                     String audioUrl = extractJsonString(responseText, "audioUrl");
                     playAudioUrlThenComplete(jobId, audioUrl);
+                } else if ("stop-audio".equals(jobType) && !jobId.isEmpty()) {
+                    stopCurrentPlayback("server stop job " + jobId);
+                    completeAndroidPlayerJob(jobId);
                 } else {
                     writePlayerJobResult("UNKNOWN JOB " + jobType + " at " + currentTimeText());
                 }
@@ -328,6 +335,35 @@ public class MainActivity extends Activity {
     }
 
 
+    private void stopCurrentPlayback(String reason) {
+        MediaPlayer playerToStop = null;
+
+        synchronized (playbackLock) {
+            if (currentMediaPlayer != null) {
+                playerToStop = currentMediaPlayer;
+                currentMediaPlayer = null;
+                currentPlaybackJobId = "";
+            }
+        }
+
+        if (playerToStop == null) {
+            writePlayerJobResult("STOP requested at " + currentTimeText() + " but nothing was playing. Reason: " + reason);
+            return;
+        }
+
+        try {
+            playerToStop.stop();
+        } catch (Exception ignored) {
+        }
+
+        try {
+            playerToStop.release();
+        } catch (Exception ignored) {
+        }
+
+        writePlayerJobResult("STOPPED playback at " + currentTimeText() + ". Reason: " + reason);
+    }
+
     private void playAudioUrlThenComplete(String jobId, String audioUrl) {
         MediaPlayer mediaPlayer = null;
 
@@ -336,16 +372,50 @@ public class MainActivity extends Activity {
                 throw new IllegalArgumentException("audioUrl was empty");
             }
 
-            writePlayerJobResult("PLAYING audio URL job " + jobId + " at " + currentTimeText()
+            synchronized (playbackLock) {
+                if (jobId.equals(currentPlaybackJobId)) {
+                    return;
+                }
+
+                if (currentMediaPlayer != null) {
+                    stopCurrentPlayback("new audio job " + jobId);
+                }
+
+                currentPlaybackJobId = jobId;
+            }
+
+            writePlayerJobResult("ACCEPTED audio URL job " + jobId + " at " + currentTimeText()
                     + "\nURL: " + audioUrl);
+
+            completeAndroidPlayerJob(jobId);
 
             mediaPlayer = new MediaPlayer();
             mediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
             mediaPlayer.setDataSource(audioUrl);
             mediaPlayer.prepare();
+
+            synchronized (playbackLock) {
+                currentMediaPlayer = mediaPlayer;
+                currentPlaybackJobId = jobId;
+            }
+
             mediaPlayer.start();
 
-            while (mediaPlayer.isPlaying()) {
+            while (true) {
+                synchronized (playbackLock) {
+                    if (currentMediaPlayer != mediaPlayer) {
+                        break;
+                    }
+                }
+
+                try {
+                    if (!mediaPlayer.isPlaying()) {
+                        break;
+                    }
+                } catch (Exception ignored) {
+                    break;
+                }
+
                 try {
                     Thread.sleep(250);
                 } catch (InterruptedException interrupted) {
@@ -354,21 +424,32 @@ public class MainActivity extends Activity {
                 }
             }
 
-            writePlayerJobResult("PLAYED audio URL job " + jobId + " at " + currentTimeText());
+            writePlayerJobResult("PLAYBACK ENDED for audio URL job " + jobId + " at " + currentTimeText());
         } catch (Exception error) {
             writePlayerJobResult("PLAY URL ERROR for job " + jobId + " at " + currentTimeText()
                     + ": " + error.getClass().getName() + ": " + error.getMessage());
+
+            completeAndroidPlayerJob(jobId);
         } finally {
-            if (mediaPlayer != null) {
+            boolean releaseHere = false;
+
+            synchronized (playbackLock) {
+                if (mediaPlayer != null && currentMediaPlayer == mediaPlayer) {
+                    currentMediaPlayer = null;
+                    currentPlaybackJobId = "";
+                    releaseHere = true;
+                }
+            }
+
+            if (releaseHere) {
                 try {
                     mediaPlayer.release();
                 } catch (Exception ignored) {
                 }
             }
-
-            completeAndroidPlayerJob(jobId);
         }
     }
+
 
     private void playTestSoundThenComplete(String jobId) {
         try {
