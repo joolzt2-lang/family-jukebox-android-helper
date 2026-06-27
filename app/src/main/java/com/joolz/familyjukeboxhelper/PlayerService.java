@@ -124,10 +124,22 @@ public class PlayerService extends Service {
                 return;
             }
 
+            if ("test-audio-url".equals(jobType) && !jobId.isEmpty()) {
+                String audioUrl = job.optString("audioUrl", "");
+                acceptAudioUrlJobWithoutPlaying(jobId, audioUrl);
+                return;
+            }
+
             Log.i(TAG, "Service saw job type but is ignoring it for now: " + jobType);
         } catch (Exception error) {
             Log.e(TAG, "Job parse error: " + error.getClass().getName() + ": " + error.getMessage());
         }
+    }
+
+    private void acceptAudioUrlJobWithoutPlaying(String jobId, String audioUrl) {
+        Log.i(TAG, "Accepted audio URL job without playing yet: " + jobId);
+        Log.i(TAG, "Audio URL: " + audioUrl);
+        completeAndroidPlayerJob(jobId);
     }
 
     private void stopCurrentPlayback(String reason) {
