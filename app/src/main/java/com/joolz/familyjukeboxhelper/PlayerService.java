@@ -142,10 +142,94 @@ public class PlayerService extends Service {
         completeAndroidPlayerJob(jobId);
     }
 
-    private void playAudioUrlThenComplete(String jobId, String audioUrl) {
-        Log.i(TAG, "Playback method reached for job " + jobId);
-        acceptAudioUrlJobWithoutPlaying(jobId, audioUrl);
+private void playAudioUrlThenComplete(String jobId, String audioUrl) {
+    MediaPlayer mediaPlayer = null;
+
+    try {
+        if (audioUrl == null || audioUrl.isEmpty()) {
+            throw new IllegalArgumentException("audioUrl was empty");
+        }
+
+        synchronized (playbackLock) {
+            if (jobId.equals(currentPlaybackJobId)) {
+                Log.i(TAG, "Already handling audio job " + jobId);
+                return;
+            }
+
+            if (currentMediaPlayer != null) {
+                stopCurrentPlayback("new audio job " + jobId);
+            }
+
+            currentPlaybackJobId = jobId;
+        }
+
+        completeAndroidPlayerJob(jobId);
+
+        mediaPlayer = new MediaPlayer();
+        mediaPlayer.setDataSource(audioUrl);
+
+        MediaPlayer finalMediaPlayer = mediaPlayer;
+
+        finalMediaPlayer.setOnCompletionListener(player -> {
+            synchronized (playbackLock) {
+                if (currentMediaPlayer == player) {
+                    currentMediaPlayer = null;
+                    currentPlaybackJobId = "";
+                }
+            }
+
+            try {
+                player.release();
+            } catch (Exception ignored) {
+            }
+
+            Log.i(TAG, "Audio playback completed for job " + jobId);
+        });
+
+        finalMediaPlayer.setOnErrorListener((player, what, extra) -> {
+            synchronized (playbackLock) {
+                if (currentMediaPlayer == player) {
+                    currentMediaPlayer = null;
+                    currentPlaybackJobId = "";
+                }
+            }
+
+            try {
+                player.release();
+            } catch (Exception ignored) {
+            }
+
+            Log.e(TAG, "Audio playback error for job " + jobId + " what=" + what + " extra=" + extra);
+            return true;
+        });
+
+        finalMediaPlayer.prepare();
+
+        synchronized (playbackLock) {
+            currentMediaPlayer = finalMediaPlayer;
+        }
+
+        finalMediaPlayer.start();
+        Log.i(TAG, "Audio playback started for job " + jobId);
+    } catch (Exception error) {
+        synchronized (playbackLock) {
+            if (currentPlaybackJobId.equals(jobId)) {
+                currentPlaybackJobId = "";
+                currentMediaPlayer = null;
+            }
+        }
+
+        if (mediaPlayer != null) {
+            try {
+                mediaPlayer.release();
+            } catch (Exception ignored) {
+            }
+        }
+
+        Log.e(TAG, "Audio job error: " + error.getClass().getName() + ": " + error.getMessage());
+        completeAndroidPlayerJob(jobId);
     }
+}
 
     private void stopCurrentPlayback(String reason) {
         MediaPlayer playerToStop = null;
