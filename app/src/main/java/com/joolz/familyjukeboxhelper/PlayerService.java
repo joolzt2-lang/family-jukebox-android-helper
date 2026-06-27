@@ -126,7 +126,7 @@ public class PlayerService extends Service {
 
             if ("test-audio-url".equals(jobType) && !jobId.isEmpty()) {
                 String audioUrl = job.optString("audioUrl", "");
-                acceptAudioUrlJobWithoutPlaying(jobId, audioUrl);
+                playAudioUrlThenComplete(jobId, audioUrl);
                 return;
             }
 
@@ -140,6 +140,11 @@ public class PlayerService extends Service {
         Log.i(TAG, "Accepted audio URL job without playing yet: " + jobId);
         Log.i(TAG, "Audio URL: " + audioUrl);
         completeAndroidPlayerJob(jobId);
+    }
+
+    private void playAudioUrlThenComplete(String jobId, String audioUrl) {
+        Log.i(TAG, "Playback method reached for job " + jobId);
+        acceptAudioUrlJobWithoutPlaying(jobId, audioUrl);
     }
 
     private void stopCurrentPlayback(String reason) {
