@@ -45,6 +45,7 @@ import org.json.JSONObject;
 
 public class MainActivity extends Activity {
     private static final int REQUEST_BLUETOOTH_CONNECT = 1001;
+    private static final int REQUEST_POST_NOTIFICATIONS = 1002;
     private static final String JUKEBOX_STATUS_URL = "http://192.168.1.252:3010/api/phone-status";
     private static final String JUKEBOX_PLAYER_JOB_URL = "http://192.168.1.252:3010/api/android-player/job";
     private static final String JUKEBOX_PLAYER_COMPLETE_URL = "http://192.168.1.252:3010/api/android-player/job/complete";
@@ -136,6 +137,8 @@ public class MainActivity extends Activity {
 
         setContentView(layout);
 
+        requestNotificationPermissionIfNeeded();
+
         refreshButton.setOnClickListener(v -> refreshReport());
         copyButton.setOnClickListener(v -> copyReport());
         sendButton.setOnClickListener(v -> sendStatusToJukebox(true));
@@ -171,6 +174,16 @@ public class MainActivity extends Activity {
     protected void onPause() {
         stopAutoSend();
         super.onPause();
+    }
+
+    private void requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(
+                    new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                    REQUEST_POST_NOTIFICATIONS
+            );
+        }
     }
 
     private void startAutoSend() {
