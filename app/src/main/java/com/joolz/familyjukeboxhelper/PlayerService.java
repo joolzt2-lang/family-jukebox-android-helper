@@ -16,15 +16,19 @@ import android.util.Log;
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+
+import org.json.JSONObject;
 
 public class PlayerService extends Service {
     private static final String TAG = "FamilyJukeboxPlayerService";
     private static final String CHANNEL_ID = "family_jukebox_player";
     private static final int NOTIFICATION_ID = 1002;
     private static final String JUKEBOX_PLAYER_JOB_URL = "http://192.168.1.252:3010/api/android-player/job";
+    private static final String JUKEBOX_PLAYER_COMPLETE_URL = "http://192.168.1.252:3010/api/android-player/job/complete";
 
     private static final long PLAYER_JOB_FIRST_DELAY_MS = 3000;
     private static final long PLAYER_JOB_INTERVAL_MS = 5000;
@@ -90,10 +94,67 @@ public class PlayerService extends Service {
                 connection.disconnect();
 
                 Log.i(TAG, "Poll HTTP " + responseCode + " body=" + responseText);
+                handleStopAudioJobOnly(responseText);
             } catch (Exception error) {
                 Log.e(TAG, "Poll error: " + error.getClass().getName() + ": " + error.getMessage());
             }
         }).start();
+    }
+
+    private void handleStopAudioJobOnly(String responseText) {
+        try {
+            JSONObject data = new JSONObject(responseText);
+            JSONObject job = data.optJSONObject("job");
+
+            if (job == null) {
+                return;
+            }
+
+            String jobId = job.optString("id", "");
+            String jobType = job.optString("type", "");
+
+            if ("stop-audio".equals(jobType) && !jobId.isEmpty()) {
+                Log.i(TAG, "Completing stop-audio job " + jobId);
+                completeAndroidPlayerJob(jobId);
+                return;
+            }
+
+            Log.i(TAG, "Service saw job type but is ignoring it for now: " + jobType);
+        } catch (Exception error) {
+            Log.e(TAG, "Job parse error: " + error.getClass().getName() + ": " + error.getMessage());
+        }
+    }
+
+    private void completeAndroidPlayerJob(String jobId) {
+        try {
+            URL url = new URL(JUKEBOX_PLAYER_COMPLETE_URL);
+            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("POST");
+            connection.setConnectTimeout(5000);
+            connection.setReadTimeout(5000);
+            connection.setRequestProperty("Accept", "application/json");
+            connection.setRequestProperty("Content-Type", "application/json");
+            connection.setDoOutput(true);
+
+            String json = "{\"jobId\":\"" + jsonEscape(jobId) + "\"}";
+            byte[] body = json.getBytes(StandardCharsets.UTF_8);
+
+            try (OutputStream output = connection.getOutputStream()) {
+                output.write(body);
+            }
+
+            int responseCode = connection.getResponseCode();
+            String responseText = readHttpResponseText(connection);
+            connection.disconnect();
+
+            Log.i(TAG, "Complete job HTTP " + responseCode + " body=" + responseText);
+        } catch (Exception error) {
+            Log.e(TAG, "Complete job error: " + error.getClass().getName() + ": " + error.getMessage());
+        }
+    }
+
+    private String jsonEscape(String value) {
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     private String readHttpResponseText(HttpURLConnection connection) throws Exception {
