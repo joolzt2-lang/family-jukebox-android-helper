@@ -8,6 +8,7 @@ import android.bluetooth.BluetoothManager;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.media.AudioAttributes;
 import android.media.AudioDeviceInfo;
@@ -123,6 +124,14 @@ public class MainActivity extends Activity {
         testToneButton.setText("Play local test tone");
         layout.addView(testToneButton);
 
+        Button startServiceButton = new Button(this);
+        startServiceButton.setText("Start background player service");
+        layout.addView(startServiceButton);
+
+        Button stopServiceButton = new Button(this);
+        stopServiceButton.setText("Stop background player service");
+        layout.addView(stopServiceButton);
+
         reportView = new TextView(this);
         reportView.setTextSize(15);
         reportView.setTextIsSelectable(true);
@@ -143,6 +152,8 @@ public class MainActivity extends Activity {
         copyButton.setOnClickListener(v -> copyReport());
         sendButton.setOnClickListener(v -> sendStatusToJukebox(true));
         testToneButton.setOnClickListener(v -> playLocalTestToneFromButton());
+        startServiceButton.setOnClickListener(v -> startPlayerService());
+        stopServiceButton.setOnClickListener(v -> stopPlayerService());
 
         ensureBluetoothPermission();
         refreshReport();
@@ -174,6 +185,23 @@ public class MainActivity extends Activity {
     protected void onPause() {
         stopAutoSend();
         super.onPause();
+    }
+
+    private void startPlayerService() {
+        Intent intent = new Intent(this, PlayerService.class);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent);
+        } else {
+            startService(intent);
+        }
+
+        Toast.makeText(this, "Background player service started", Toast.LENGTH_SHORT).show();
+    }
+
+    private void stopPlayerService() {
+        stopService(new Intent(this, PlayerService.class));
+        Toast.makeText(this, "Background player service stopped", Toast.LENGTH_SHORT).show();
     }
 
     private void requestNotificationPermissionIfNeeded() {
