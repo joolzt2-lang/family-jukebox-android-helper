@@ -117,40 +117,55 @@ public class MainActivity extends Activity {
         layout.setPadding(28, 28, 28, 28);
 
         Button refreshButton = new Button(this);
-        refreshButton.setText("Refresh phone status");
+        refreshButton.setText("Refresh status");
         layout.addView(refreshButton);
 
         Button copyButton = new Button(this);
-        copyButton.setText("Copy report");
+        copyButton.setText("Copy diagnostics");
         layout.addView(copyButton);
 
         Button sendButton = new Button(this);
-        sendButton.setText("Send status to jukebox");
+        sendButton.setText("Send status");
         layout.addView(sendButton);
 
         Button testToneButton = new Button(this);
-        testToneButton.setText("Play local test tone");
+        testToneButton.setText("Test sound");
         layout.addView(testToneButton);
 
         Button startServiceButton = new Button(this);
-        startServiceButton.setText("Start background player service");
+        startServiceButton.setText("Start helper");
         layout.addView(startServiceButton);
 
         Button stopServiceButton = new Button(this);
-        stopServiceButton.setText("Stop background player service");
+        stopServiceButton.setText("Stop helper");
         layout.addView(stopServiceButton);
 
         reportView = new TextView(this);
         reportView.setTextSize(15);
         reportView.setTextIsSelectable(true);
 
+        Button diagnosticsButton = new Button(this);
+        diagnosticsButton.setText("Show diagnostics");
+        layout.addView(diagnosticsButton);
+
         ScrollView scrollView = new ScrollView(this);
         scrollView.addView(reportView);
+        scrollView.setVisibility(android.view.View.GONE);
         layout.addView(scrollView, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 0,
                 1
         ));
+
+        diagnosticsButton.setOnClickListener(v -> {
+            if (scrollView.getVisibility() == android.view.View.VISIBLE) {
+                scrollView.setVisibility(android.view.View.GONE);
+                diagnosticsButton.setText("Show diagnostics");
+            } else {
+                scrollView.setVisibility(android.view.View.VISIBLE);
+                diagnosticsButton.setText("Hide diagnostics");
+            }
+        });
 
         setContentView(layout);
 
