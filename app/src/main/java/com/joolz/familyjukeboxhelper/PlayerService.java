@@ -36,6 +36,7 @@ public class PlayerService extends Service {
     private final Object playbackLock = new Object();
     private MediaPlayer currentMediaPlayer = null;
     private String currentPlaybackJobId = "";
+    private boolean currentPlaybackPaused = false;
 
     private final Handler playerJobHandler = new Handler(Looper.getMainLooper());
     private final Runnable playerJobRunnable = new Runnable() {
@@ -124,6 +125,20 @@ public class PlayerService extends Service {
                 return;
             }
 
+            if ("pause-audio".equals(jobType) && !jobId.isEmpty()) {
+                Log.i(TAG, "Handling pause-audio job " + jobId);
+                pauseCurrentPlayback("server pause job " + jobId);
+                completeAndroidPlayerJob(jobId);
+                return;
+            }
+
+            if ("resume-audio".equals(jobType) && !jobId.isEmpty()) {
+                Log.i(TAG, "Handling resume-audio job " + jobId);
+                resumeCurrentPlayback("server resume job " + jobId);
+                completeAndroidPlayerJob(jobId);
+                return;
+            }
+
             if ("test-audio-url".equals(jobType) && !jobId.isEmpty()) {
                 String audioUrl = job.optString("audioUrl", "");
                 playAudioUrlThenComplete(jobId, audioUrl);
@@ -161,6 +176,7 @@ private void playAudioUrlThenComplete(String jobId, String audioUrl) {
             }
 
             currentPlaybackJobId = jobId;
+            currentPlaybackPaused = false;
         }
 
         completeAndroidPlayerJob(jobId);
@@ -175,6 +191,7 @@ private void playAudioUrlThenComplete(String jobId, String audioUrl) {
                 if (currentMediaPlayer == player) {
                     currentMediaPlayer = null;
                     currentPlaybackJobId = "";
+                    currentPlaybackPaused = false;
                 }
             }
 
@@ -191,6 +208,7 @@ private void playAudioUrlThenComplete(String jobId, String audioUrl) {
                 if (currentMediaPlayer == player) {
                     currentMediaPlayer = null;
                     currentPlaybackJobId = "";
+                    currentPlaybackPaused = false;
                 }
             }
 
@@ -216,6 +234,7 @@ private void playAudioUrlThenComplete(String jobId, String audioUrl) {
             if (currentPlaybackJobId.equals(jobId)) {
                 currentPlaybackJobId = "";
                 currentMediaPlayer = null;
+                currentPlaybackPaused = false;
             }
         }
 
@@ -231,6 +250,61 @@ private void playAudioUrlThenComplete(String jobId, String audioUrl) {
     }
 }
 
+
+    private void pauseCurrentPlayback(String reason) {
+        MediaPlayer playerToPause = null;
+
+        synchronized (playbackLock) {
+            if (currentMediaPlayer != null && !currentPlaybackPaused) {
+                playerToPause = currentMediaPlayer;
+                currentPlaybackPaused = true;
+            }
+        }
+
+        if (playerToPause == null) {
+            Log.i(TAG, "Pause requested but nothing was playing. Reason: " + reason);
+            return;
+        }
+
+        try {
+            if (playerToPause.isPlaying()) {
+                playerToPause.pause();
+            }
+            Log.i(TAG, "Paused playback. Reason: " + reason);
+        } catch (Exception error) {
+            synchronized (playbackLock) {
+                currentPlaybackPaused = false;
+            }
+            Log.e(TAG, "Pause failed: " + error.getClass().getName() + ": " + error.getMessage());
+        }
+    }
+
+    private void resumeCurrentPlayback(String reason) {
+        MediaPlayer playerToResume = null;
+
+        synchronized (playbackLock) {
+            if (currentMediaPlayer != null && currentPlaybackPaused) {
+                playerToResume = currentMediaPlayer;
+                currentPlaybackPaused = false;
+            }
+        }
+
+        if (playerToResume == null) {
+            Log.i(TAG, "Resume requested but nothing was paused. Reason: " + reason);
+            return;
+        }
+
+        try {
+            playerToResume.start();
+            Log.i(TAG, "Resumed playback. Reason: " + reason);
+        } catch (Exception error) {
+            synchronized (playbackLock) {
+                currentPlaybackPaused = true;
+            }
+            Log.e(TAG, "Resume failed: " + error.getClass().getName() + ": " + error.getMessage());
+        }
+    }
+
     private void stopCurrentPlayback(String reason) {
         MediaPlayer playerToStop = null;
 
@@ -239,6 +313,7 @@ private void playAudioUrlThenComplete(String jobId, String audioUrl) {
                 playerToStop = currentMediaPlayer;
                 currentMediaPlayer = null;
                 currentPlaybackJobId = "";
+                currentPlaybackPaused = false;
             }
         }
 
