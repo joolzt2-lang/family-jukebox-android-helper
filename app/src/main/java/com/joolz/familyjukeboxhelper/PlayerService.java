@@ -13,6 +13,19 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.util.Log;
 
+import android.bluetooth.BluetoothA2dp;
+import android.bluetooth.BluetoothProfile;
+import android.Manifest;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothManager;
+import android.content.Context;
+import android.content.pm.PackageManager;
+import java.lang.reflect.Method;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -139,6 +152,12 @@ public class PlayerService extends Service {
                 return;
             }
 
+            if ("connect-bluetooth-speaker".equals(jobType) && !jobId.isEmpty()) {
+                Log.i(TAG, "Handling connect-bluetooth-speaker job " + jobId);
+                connectBluetoothSpeakerThenComplete(jobId, job);
+                return;
+            }
+
             if ("test-audio-url".equals(jobType) && !jobId.isEmpty()) {
                 String audioUrl = job.optString("audioUrl", "");
                 playAudioUrlThenComplete(jobId, audioUrl);
@@ -155,6 +174,181 @@ public class PlayerService extends Service {
         Log.i(TAG, "Accepted audio URL job without playing yet: " + jobId);
         Log.i(TAG, "Audio URL: " + audioUrl);
         completeAndroidPlayerJob(jobId);
+    }
+
+    private void connectBluetoothSpeakerThenComplete(String jobId, JSONObject job) {
+        String address = job.optString("address", "");
+        String bluetoothName = job.optString("bluetoothName", "");
+        String speakerName = job.optString("speakerName", bluetoothName);
+
+        Log.i(TAG, "CONNECT BLUETOOTH job " + jobId
+                + " target=" + speakerName + " address=" + address);
+
+        String result = connectBluetoothSpeaker(address, bluetoothName, speakerName);
+        Log.i(TAG, result);
+        completeAndroidPlayerJob(jobId);
+    }
+
+    private String connectBluetoothSpeaker(String address, String bluetoothName, String speakerName) {
+        if (Build.VERSION.SDK_INT >= 31 &&
+                checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            return "CONNECT BLUETOOTH failed: BLUETOOTH_CONNECT permission is not granted.";
+        }
+
+        BluetoothManager manager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+        BluetoothAdapter adapter = manager != null ? manager.getAdapter() : BluetoothAdapter.getDefaultAdapter();
+
+        if (adapter == null) {
+            return "CONNECT BLUETOOTH failed: no Bluetooth adapter found.";
+        }
+
+        if (!adapter.isEnabled()) {
+            return "CONNECT BLUETOOTH failed: Bluetooth is off.";
+        }
+
+        BluetoothDevice target = findBondedBluetoothDevice(adapter, address, bluetoothName);
+
+        if (target == null) {
+            return "CONNECT BLUETOOTH failed: target is not paired on this phone: "
+                    + speakerName + " / " + bluetoothName + " / " + address;
+        }
+
+        final BluetoothA2dp[] a2dpHolder = new BluetoothA2dp[1];
+        CountDownLatch latch = new CountDownLatch(1);
+
+        BluetoothProfile.ServiceListener listener = new BluetoothProfile.ServiceListener() {
+            @Override
+            public void onServiceConnected(int profile, BluetoothProfile proxy) {
+                if (profile == BluetoothProfile.A2DP) {
+                    a2dpHolder[0] = (BluetoothA2dp) proxy;
+                }
+                latch.countDown();
+            }
+
+            @Override
+            public void onServiceDisconnected(int profile) {
+            }
+        };
+
+        boolean requestedProxy = adapter.getProfileProxy(this, listener, BluetoothProfile.A2DP);
+
+        if (!requestedProxy) {
+            return "CONNECT BLUETOOTH failed: Android would not provide the A2DP profile proxy.";
+        }
+
+        BluetoothA2dp a2dp = null;
+
+        try {
+            if (!latch.await(8, TimeUnit.SECONDS)) {
+                return "CONNECT BLUETOOTH failed: timed out waiting for A2DP profile proxy.";
+            }
+
+            a2dp = a2dpHolder[0];
+
+            if (a2dp == null) {
+                return "CONNECT BLUETOOTH failed: A2DP profile proxy was empty.";
+            }
+
+            int beforeState = a2dp.getConnectionState(target);
+            String targetLabel = safeDeviceName(target) + " / " + address;
+
+            if (beforeState == BluetoothProfile.STATE_CONNECTED) {
+                trySetActiveA2dpDevice(a2dp, target);
+                return "CONNECT BLUETOOTH already connected: " + targetLabel
+                        + ". Asked Android to make it active.";
+            }
+
+            Object connectResult = invokeBluetoothA2dpMethod(a2dp, "connect", target);
+
+            for (int attempt = 0; attempt < 16; attempt++) {
+                int state = a2dp.getConnectionState(target);
+
+                if (state == BluetoothProfile.STATE_CONNECTED) {
+                    trySetActiveA2dpDevice(a2dp, target);
+                    return "CONNECT BLUETOOTH connected: " + targetLabel
+                            + " connectResult=" + String.valueOf(connectResult);
+                }
+
+                try {
+                    Thread.sleep(750);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+
+            return "CONNECT BLUETOOTH did not become connected: " + targetLabel
+                    + " initialState=" + beforeState
+                    + " connectResult=" + String.valueOf(connectResult);
+        } catch (Exception error) {
+            return "CONNECT BLUETOOTH failed: " + error.getClass().getName() + ": " + error.getMessage();
+        } finally {
+            if (a2dp != null) {
+                try {
+                    adapter.closeProfileProxy(BluetoothProfile.A2DP, a2dp);
+                } catch (Exception ignored) {
+                }
+            }
+        }
+    }
+
+    private BluetoothDevice findBondedBluetoothDevice(BluetoothAdapter adapter, String address, String bluetoothName) {
+        try {
+            Set<BluetoothDevice> bondedDevices = adapter.getBondedDevices();
+
+            if (bondedDevices == null) {
+                return null;
+            }
+
+            for (BluetoothDevice device : bondedDevices) {
+                String deviceAddress = "";
+
+                try {
+                    deviceAddress = device.getAddress();
+                } catch (SecurityException ignored) {
+                }
+
+                String deviceName = safeDeviceName(device);
+
+                if ((!address.isEmpty() && address.equalsIgnoreCase(deviceAddress)) ||
+                        (!bluetoothName.isEmpty() && bluetoothName.equalsIgnoreCase(deviceName))) {
+                    return device;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
+        return null;
+    }
+
+    private Object invokeBluetoothA2dpMethod(BluetoothA2dp a2dp, String methodName, BluetoothDevice target)
+            throws Exception {
+        Method method;
+
+        try {
+            method = a2dp.getClass().getMethod(methodName, BluetoothDevice.class);
+        } catch (NoSuchMethodException missingPublicMethod) {
+            method = a2dp.getClass().getDeclaredMethod(methodName, BluetoothDevice.class);
+            method.setAccessible(true);
+        }
+
+        return method.invoke(a2dp, target);
+    }
+
+    private void trySetActiveA2dpDevice(BluetoothA2dp a2dp, BluetoothDevice target) {
+        try {
+            invokeBluetoothA2dpMethod(a2dp, "setActiveDevice", target);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private String safeDeviceName(BluetoothDevice device) {
+        try {
+            String name = device.getName();
+            return name == null || name.trim().isEmpty() ? "(unnamed)" : name;
+        } catch (SecurityException error) {
+            return "(permission blocked)";
+        }
     }
 
 private void playAudioUrlThenComplete(String jobId, String audioUrl) {
