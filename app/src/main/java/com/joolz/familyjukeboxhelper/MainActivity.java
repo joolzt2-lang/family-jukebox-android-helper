@@ -17,6 +17,7 @@ import android.media.AudioManager;
 import android.media.ToneGenerator;
 import android.media.AudioTrack;
 import android.media.MediaPlayer;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -56,6 +57,7 @@ public class MainActivity extends Activity {
     private static final String JUKEBOX_STATUS_URL = "http://192.168.1.252:3010/api/phone-status";
     private static final String JUKEBOX_PLAYER_JOB_URL = "http://192.168.1.252:3010/api/android-player/job";
     private static final String JUKEBOX_PLAYER_COMPLETE_URL = "http://192.168.1.252:3010/api/android-player/job/complete";
+    private static final String JUKEBOX_WEB_URL = "http://192.168.1.252:3010";
 
     private static final long AUTO_SEND_FIRST_DELAY_MS = 2000;
     private static final long AUTO_SEND_INTERVAL_MS = 10000;
@@ -116,6 +118,10 @@ public class MainActivity extends Activity {
         layout.setOrientation(LinearLayout.VERTICAL);
         layout.setPadding(28, 28, 28, 28);
 
+        Button launchJukeboxButton = new Button(this);
+        launchJukeboxButton.setText("Launch Jukebox");
+        layout.addView(launchJukeboxButton);
+
         Button refreshButton = new Button(this);
         refreshButton.setText("Refresh status");
         layout.addView(refreshButton);
@@ -171,6 +177,7 @@ public class MainActivity extends Activity {
 
         requestNotificationPermissionIfNeeded();
 
+        launchJukeboxButton.setOnClickListener(v -> launchJukebox());
         refreshButton.setOnClickListener(v -> refreshReport());
         copyButton.setOnClickListener(v -> copyReport());
         sendButton.setOnClickListener(v -> sendStatusToJukebox(true));
@@ -208,6 +215,17 @@ public class MainActivity extends Activity {
     protected void onPause() {
         stopAutoSend();
         super.onPause();
+    }
+
+    private void launchJukebox() {
+        startPlayerService();
+
+        try {
+            Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(JUKEBOX_WEB_URL));
+            startActivity(browserIntent);
+        } catch (Exception error) {
+            Toast.makeText(this, "Could not open Family Jukebox web page", Toast.LENGTH_LONG).show();
+        }
     }
 
     private void startPlayerService() {
