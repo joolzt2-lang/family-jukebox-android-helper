@@ -78,6 +78,7 @@ public class MainActivity extends Activity {
     private final Object playbackLock = new Object();
     private MediaPlayer currentMediaPlayer = null;
     private String currentPlaybackJobId = "";
+    private boolean currentPlaybackPaused = false;
 
 
     private static class ApprovedSpeaker {
@@ -97,7 +98,8 @@ public class MainActivity extends Activity {
             new ApprovedSpeaker("Office", "Echo Dot-QCK", "2C:71:FF:74:F0:A3"),
             new ApprovedSpeaker("Bedroom", "Echo Dot-W4Q", "FC:A1:83:AC:E8:DD"),
             new ApprovedSpeaker("Kitchen", "Echo Dot-JAC", "08:A6:BC:88:CA:64"),
-            new ApprovedSpeaker("Conservatory", "Echo Dot-HSS", "4C:17:44:8F:15:C9")
+            new ApprovedSpeaker("Conservatory", "Echo Dot-HSS", "4C:17:44:8F:15:C9"),
+            new ApprovedSpeaker("Bose Headphones", "LE-Bose QC35 II", "2C:41:A1:C3:42:FA")
     };
 
     @Override
@@ -283,6 +285,12 @@ public class MainActivity extends Activity {
                 } else if ("stop-audio".equals(jobType) && !jobId.isEmpty()) {
                     stopCurrentPlayback("server stop job " + jobId);
                     completeAndroidPlayerJob(jobId);
+                } else if ("pause-audio".equals(jobType) && !jobId.isEmpty()) {
+                    pauseCurrentPlayback("server pause job " + jobId);
+                    completeAndroidPlayerJob(jobId);
+                } else if ("resume-audio".equals(jobType) && !jobId.isEmpty()) {
+                    resumeCurrentPlayback("server resume job " + jobId);
+                    completeAndroidPlayerJob(jobId);
                 } else {
                     writePlayerJobResult("UNKNOWN JOB " + jobType + " at " + currentTimeText());
                 }
@@ -376,6 +384,61 @@ public class MainActivity extends Activity {
     }
 
 
+
+    private void pauseCurrentPlayback(String reason) {
+        MediaPlayer playerToPause = null;
+
+        synchronized (playbackLock) {
+            if (currentMediaPlayer != null && !currentPlaybackPaused) {
+                playerToPause = currentMediaPlayer;
+                currentPlaybackPaused = true;
+            }
+        }
+
+        if (playerToPause == null) {
+            writePlayerJobResult("PAUSE requested at " + currentTimeText() + " but nothing was playing. Reason: " + reason);
+            return;
+        }
+
+        try {
+            if (playerToPause.isPlaying()) {
+                playerToPause.pause();
+            }
+            writePlayerJobResult("PAUSED playback at " + currentTimeText() + ". Reason: " + reason);
+        } catch (Exception error) {
+            synchronized (playbackLock) {
+                currentPlaybackPaused = false;
+            }
+            writePlayerJobResult("PAUSE failed at " + currentTimeText() + ": " + error.getClass().getName() + ": " + error.getMessage());
+        }
+    }
+
+    private void resumeCurrentPlayback(String reason) {
+        MediaPlayer playerToResume = null;
+
+        synchronized (playbackLock) {
+            if (currentMediaPlayer != null && currentPlaybackPaused) {
+                playerToResume = currentMediaPlayer;
+                currentPlaybackPaused = false;
+            }
+        }
+
+        if (playerToResume == null) {
+            writePlayerJobResult("RESUME requested at " + currentTimeText() + " but nothing was paused. Reason: " + reason);
+            return;
+        }
+
+        try {
+            playerToResume.start();
+            writePlayerJobResult("RESUMED playback at " + currentTimeText() + ". Reason: " + reason);
+        } catch (Exception error) {
+            synchronized (playbackLock) {
+                currentPlaybackPaused = true;
+            }
+            writePlayerJobResult("RESUME failed at " + currentTimeText() + ": " + error.getClass().getName() + ": " + error.getMessage());
+        }
+    }
+
     private void stopCurrentPlayback(String reason) {
         MediaPlayer playerToStop = null;
 
@@ -384,6 +447,7 @@ public class MainActivity extends Activity {
                 playerToStop = currentMediaPlayer;
                 currentMediaPlayer = null;
                 currentPlaybackJobId = "";
+                currentPlaybackPaused = false;
             }
         }
 
@@ -423,6 +487,7 @@ public class MainActivity extends Activity {
                 }
 
                 currentPlaybackJobId = jobId;
+                currentPlaybackPaused = false;
             }
 
             writePlayerJobResult("ACCEPTED audio URL job " + jobId + " at " + currentTimeText()
@@ -438,6 +503,7 @@ public class MainActivity extends Activity {
             synchronized (playbackLock) {
                 currentMediaPlayer = mediaPlayer;
                 currentPlaybackJobId = jobId;
+                currentPlaybackPaused = false;
             }
 
             mediaPlayer.start();
@@ -449,12 +515,19 @@ public class MainActivity extends Activity {
                     }
                 }
 
-                try {
-                    if (!mediaPlayer.isPlaying()) {
+                boolean paused;
+                synchronized (playbackLock) {
+                    paused = currentPlaybackPaused;
+                }
+
+                if (!paused) {
+                    try {
+                        if (!mediaPlayer.isPlaying()) {
+                            break;
+                        }
+                    } catch (Exception ignored) {
                         break;
                     }
-                } catch (Exception ignored) {
-                    break;
                 }
 
                 try {
@@ -478,6 +551,7 @@ public class MainActivity extends Activity {
                 if (mediaPlayer != null && currentMediaPlayer == mediaPlayer) {
                     currentMediaPlayer = null;
                     currentPlaybackJobId = "";
+                    currentPlaybackPaused = false;
                     releaseHere = true;
                 }
             }
