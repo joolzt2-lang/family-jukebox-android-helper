@@ -9,7 +9,7 @@ import android.os.Bundle;
 import android.widget.Toast;
 
 public class JukeboxLaunchActivity extends Activity {
-    
+    private static final String JUKEBOX_WEB_URL = "http://192.168.1.252:3010";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -24,7 +24,7 @@ public class JukeboxLaunchActivity extends Activity {
         }
 
         try {
-            Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(JukeboxConfig.WEB_URL));
+            Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(JUKEBOX_WEB_URL));
             browserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(browserIntent);
         } catch (ActivityNotFoundException error) {

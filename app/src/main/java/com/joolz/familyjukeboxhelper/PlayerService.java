@@ -41,8 +41,8 @@ public class PlayerService extends Service {
     private static final String TAG = "FamilyJukeboxPlayerService";
     private static final String CHANNEL_ID = "family_jukebox_player";
     private static final int NOTIFICATION_ID = 1002;
-    private static final String JUKEBOX_PLAYER_JOB_URL = JukeboxConfig.PLAYER_JOB_URL;
-    private static final String JUKEBOX_PLAYER_COMPLETE_URL = JukeboxConfig.PLAYER_COMPLETE_URL;
+    private static final String JUKEBOX_PLAYER_JOB_URL = "http://192.168.1.252:3010/api/android-player/job";
+    private static final String JUKEBOX_PLAYER_COMPLETE_URL = "http://192.168.1.252:3010/api/android-player/job/complete";
 
     private static final long PLAYER_JOB_FIRST_DELAY_MS = 3000;
     private static final long PLAYER_JOB_INTERVAL_MS = 5000;
