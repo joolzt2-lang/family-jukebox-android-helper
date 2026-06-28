@@ -7,6 +7,17 @@ export PATH="$ANDROID_HOME/platform-tools:$PATH"
 
 APP_ID="com.joolz.familyjukeboxhelper"
 BUILD_DIR="build"
+CONFIG_FILE="jukebox-helper.conf"
+JUKEBOX_BASE_URL="http://192.168.1.252:3010"
+
+if [ -f "$CONFIG_FILE" ]; then
+  # shellcheck disable=SC1090
+  source "$CONFIG_FILE"
+fi
+
+JUKEBOX_BASE_URL="${JUKEBOX_BASE_URL%/}"
+GENERATED_JAVA_DIR="$BUILD_DIR/generated-java"
+GENERATED_CONFIG_DIR="$GENERATED_JAVA_DIR/com/joolz/familyjukeboxhelper"
 
 ANDROID_JAR="$ANDROID_HOME/platforms/android-35/android.jar"
 AAPT2="$ANDROID_HOME/build-tools/35.0.0/aapt2"
@@ -14,7 +25,7 @@ D8="$ANDROID_HOME/build-tools/35.0.0/d8"
 APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
 
 rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR/classes" "$BUILD_DIR/res" "$BUILD_DIR/dex" "$BUILD_DIR/apk"
+mkdir -p "$BUILD_DIR/classes" "$BUILD_DIR/res" "$BUILD_DIR/dex" "$BUILD_DIR/apk" "$GENERATED_CONFIG_DIR"
 
 echo "Compiling resources..."
 "$AAPT2" compile \
@@ -30,6 +41,24 @@ echo "Linking APK..."
   --target-sdk-version 35 \
   "$BUILD_DIR/res/resources.zip"
 
+echo "Generating jukebox config..."
+cat > "$GENERATED_CONFIG_DIR/JukeboxConfig.java" <<EOF
+package com.joolz.familyjukeboxhelper;
+
+final class JukeboxConfig {
+    static final String BASE_URL = "$JUKEBOX_BASE_URL";
+    static final String WEB_URL = BASE_URL;
+    static final String STATUS_URL = BASE_URL + "/api/phone-status";
+    static final String PLAYER_JOB_URL = BASE_URL + "/api/android-player/job";
+    static final String PLAYER_COMPLETE_URL = BASE_URL + "/api/android-player/job/complete";
+
+    private JukeboxConfig() {
+    }
+}
+EOF
+
+echo "Using jukebox server: $JUKEBOX_BASE_URL"
+
 echo "Compiling Java..."
 javac \
   -encoding UTF-8 \
@@ -37,7 +66,7 @@ javac \
   -target 17 \
   -classpath "$ANDROID_JAR" \
   -d "$BUILD_DIR/classes" \
-  $(find app/src/main/java -name '*.java' | sort)
+  $(find app/src/main/java "$GENERATED_JAVA_DIR" -name '*.java' | sort)
 
 echo "Converting Java classes to Android DEX..."
 "$D8" \

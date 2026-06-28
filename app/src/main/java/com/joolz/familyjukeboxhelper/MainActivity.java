@@ -54,10 +54,10 @@ import org.json.JSONObject;
 public class MainActivity extends Activity {
     private static final int REQUEST_BLUETOOTH_CONNECT = 1001;
     private static final int REQUEST_POST_NOTIFICATIONS = 1002;
-    private static final String JUKEBOX_STATUS_URL = "http://192.168.1.252:3010/api/phone-status";
-    private static final String JUKEBOX_PLAYER_JOB_URL = "http://192.168.1.252:3010/api/android-player/job";
-    private static final String JUKEBOX_PLAYER_COMPLETE_URL = "http://192.168.1.252:3010/api/android-player/job/complete";
-    private static final String JUKEBOX_WEB_URL = "http://192.168.1.252:3010";
+    private static final String JUKEBOX_STATUS_URL = JukeboxConfig.STATUS_URL;
+    private static final String JUKEBOX_PLAYER_JOB_URL = JukeboxConfig.PLAYER_JOB_URL;
+    private static final String JUKEBOX_PLAYER_COMPLETE_URL = JukeboxConfig.PLAYER_COMPLETE_URL;
+    private static final String JUKEBOX_WEB_URL = JukeboxConfig.WEB_URL;
 
     private static final long AUTO_SEND_FIRST_DELAY_MS = 2000;
     private static final long AUTO_SEND_INTERVAL_MS = 10000;
@@ -221,7 +221,7 @@ public class MainActivity extends Activity {
         startPlayerService();
 
         try {
-            Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(JUKEBOX_WEB_URL));
+            Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(JukeboxConfig.WEB_URL));
             startActivity(browserIntent);
         } catch (Exception error) {
             Toast.makeText(this, "Could not open Family Jukebox web page", Toast.LENGTH_LONG).show();
