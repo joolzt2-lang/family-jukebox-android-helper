@@ -36,6 +36,8 @@ import java.nio.charset.StandardCharsets;
 
 import org.json.JSONObject;
 import android.media.MediaPlayer;
+import android.media.AudioDeviceInfo;
+import android.media.AudioManager;
 
 public class PlayerService extends Service {
     private static final String TAG = "FamilyJukeboxPlayerService";
@@ -43,9 +45,12 @@ public class PlayerService extends Service {
     private static final int NOTIFICATION_ID = 1002;
     private static final String JUKEBOX_PLAYER_JOB_URL = "http://192.168.1.252:3010/api/android-player/job";
     private static final String JUKEBOX_PLAYER_COMPLETE_URL = "http://192.168.1.252:3010/api/android-player/job/complete";
+    private static final String JUKEBOX_STATUS_URL = "http://192.168.1.252:3010/api/phone-status";
 
     private static final long PLAYER_JOB_FIRST_DELAY_MS = 3000;
     private static final long PLAYER_JOB_INTERVAL_MS = 5000;
+    private static final long PHONE_STATUS_FIRST_DELAY_MS = 2000;
+    private static final long PHONE_STATUS_INTERVAL_MS = 10000;
     private final Object playbackLock = new Object();
     private MediaPlayer currentMediaPlayer = null;
     private String currentPlaybackJobId = "";
@@ -60,6 +65,16 @@ public class PlayerService extends Service {
         }
     };
 
+
+    private final Handler phoneStatusHandler = new Handler(Looper.getMainLooper());
+    private final Runnable phoneStatusRunnable = new Runnable() {
+        @Override
+        public void run() {
+            sendPhoneStatusToJukebox();
+            phoneStatusHandler.postDelayed(this, PHONE_STATUS_INTERVAL_MS);
+        }
+    };
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -71,6 +86,7 @@ public class PlayerService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         startForegroundNow("Family Jukebox helper is running");
         startPlayerJobPolling();
+        startPhoneStatusHeartbeat();
         Log.i(TAG, "PlayerService started");
         return START_STICKY;
     }
@@ -78,6 +94,7 @@ public class PlayerService extends Service {
     @Override
     public void onDestroy() {
         stopPlayerJobPolling();
+        stopPhoneStatusHeartbeat();
         Log.i(TAG, "PlayerService destroyed");
         stopForeground(true);
         super.onDestroy();
@@ -96,6 +113,202 @@ public class PlayerService extends Service {
     private void stopPlayerJobPolling() {
         playerJobHandler.removeCallbacks(playerJobRunnable);
     }
+
+
+    private void startPhoneStatusHeartbeat() {
+        phoneStatusHandler.removeCallbacks(phoneStatusRunnable);
+        phoneStatusHandler.postDelayed(phoneStatusRunnable, PHONE_STATUS_FIRST_DELAY_MS);
+    }
+
+    private void stopPhoneStatusHeartbeat() {
+        phoneStatusHandler.removeCallbacks(phoneStatusRunnable);
+    }
+
+    private void sendPhoneStatusToJukebox() {
+        new Thread(() -> {
+            HttpURLConnection connection = null;
+
+            try {
+                String json = buildPhoneStatusJson();
+                byte[] body = json.getBytes(StandardCharsets.UTF_8);
+
+                URL url = new URL(JUKEBOX_STATUS_URL);
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("POST");
+                connection.setConnectTimeout(5000);
+                connection.setReadTimeout(5000);
+                connection.setDoOutput(true);
+                connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                connection.setRequestProperty("Accept", "application/json");
+
+                try (OutputStream output = connection.getOutputStream()) {
+                    output.write(body);
+                }
+
+                int responseCode = connection.getResponseCode();
+                Log.i(TAG, "Phone status HTTP " + responseCode);
+            } catch (Exception error) {
+                Log.e(TAG, "Phone status error: " + error.getClass().getName() + ": " + error.getMessage());
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        }).start();
+    }
+
+    private String buildPhoneStatusJson() {
+        StringBuilder json = new StringBuilder();
+        String activeSpeaker = "";
+
+        json.append("{");
+        json.append("\"deviceName\":\"Julian phone\",");
+        json.append("\"serverRole\":\"approved-king-device\",");
+        json.append("\"androidModel\":\"").append(jsonEscape(Build.MODEL)).append("\",");
+        json.append("\"androidRelease\":\"").append(jsonEscape(Build.VERSION.RELEASE)).append("\",");
+        json.append("\"approvedSpeakers\":[");
+
+        Set<BluetoothDevice> pairedDevices = null;
+
+        if (bluetoothConnectPermissionGrantedForStatus()) {
+            try {
+                BluetoothManager manager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+                BluetoothAdapter adapter = manager != null ? manager.getAdapter() : BluetoothAdapter.getDefaultAdapter();
+                pairedDevices = adapter != null ? adapter.getBondedDevices() : null;
+            } catch (SecurityException error) {
+                Log.e(TAG, "Phone status Bluetooth paired-device error: " + error.getMessage());
+            }
+        }
+
+        for (int index = 0; index < PHONE_STATUS_APPROVED_SPEAKERS.length; index++) {
+            PhoneStatusSpeaker speaker = PHONE_STATUS_APPROVED_SPEAKERS[index];
+            BluetoothDevice pairedDevice = findPhoneStatusPairedDevice(pairedDevices, speaker);
+            boolean paired = pairedDevice != null;
+            boolean active = isPhoneStatusAudioProductActive(speaker.bluetoothName);
+
+            if (active) {
+                activeSpeaker = speaker.roomName;
+            }
+
+            if (index > 0) {
+                json.append(",");
+            }
+
+            json.append("{");
+            json.append("\"room\":\"").append(jsonEscape(speaker.roomName)).append("\",");
+            json.append("\"bluetoothName\":\"").append(jsonEscape(speaker.bluetoothName)).append("\",");
+            json.append("\"address\":\"").append(jsonEscape(speaker.address)).append("\",");
+            json.append("\"paired\":").append(paired).append(",");
+            json.append("\"active\":").append(active);
+            json.append("}");
+        }
+
+        json.append("],");
+        json.append("\"activeSpeaker\":\"").append(jsonEscape(activeSpeaker)).append("\"");
+        json.append("}");
+
+        return json.toString();
+    }
+
+    private boolean bluetoothConnectPermissionGrantedForStatus() {
+        return Build.VERSION.SDK_INT < 31
+                || checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private BluetoothDevice findPhoneStatusPairedDevice(Set<BluetoothDevice> pairedDevices, PhoneStatusSpeaker speaker) {
+        if (pairedDevices == null) {
+            return null;
+        }
+
+        for (BluetoothDevice device : pairedDevices) {
+            String name = safeBluetoothDeviceNameForStatus(device);
+            String address = "";
+
+            try {
+                address = device.getAddress();
+            } catch (SecurityException ignored) {
+            }
+
+            if (speaker.address.equalsIgnoreCase(address)
+                    || speaker.bluetoothName.equalsIgnoreCase(name)) {
+                return device;
+            }
+        }
+
+        return null;
+    }
+
+    private boolean isPhoneStatusAudioProductActive(String bluetoothName) {
+        try {
+            AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+
+            if (audioManager == null) {
+                return false;
+            }
+
+            AudioDeviceInfo[] devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS);
+
+            for (AudioDeviceInfo device : devices) {
+                String typeName = phoneStatusAudioDeviceTypeName(device.getType());
+                String productName = safeAudioProductNameForStatus(device);
+
+                if ("Bluetooth audio".equals(typeName)
+                        && bluetoothName.equalsIgnoreCase(productName)) {
+                    return true;
+                }
+            }
+        } catch (Exception error) {
+            Log.e(TAG, "Phone status active audio check error: " + error.getMessage());
+        }
+
+        return false;
+    }
+
+    private String safeBluetoothDeviceNameForStatus(BluetoothDevice device) {
+        try {
+            String name = device.getName();
+            return name != null ? name : "";
+        } catch (SecurityException error) {
+            return "";
+        }
+    }
+
+    private String safeAudioProductNameForStatus(AudioDeviceInfo device) {
+        CharSequence productName = device.getProductName();
+        return productName != null ? productName.toString() : "";
+    }
+
+    private String phoneStatusAudioDeviceTypeName(int type) {
+        switch (type) {
+            case AudioDeviceInfo.TYPE_BLUETOOTH_A2DP:
+                return "Bluetooth audio";
+            case AudioDeviceInfo.TYPE_BLUETOOTH_SCO:
+                return "Bluetooth call audio";
+            default:
+                return "";
+        }
+    }
+
+    private static final class PhoneStatusSpeaker {
+        final String roomName;
+        final String bluetoothName;
+        final String address;
+
+        PhoneStatusSpeaker(String roomName, String bluetoothName, String address) {
+            this.roomName = roomName;
+            this.bluetoothName = bluetoothName;
+            this.address = address;
+        }
+    }
+
+    private static final PhoneStatusSpeaker[] PHONE_STATUS_APPROVED_SPEAKERS = new PhoneStatusSpeaker[]{
+            new PhoneStatusSpeaker("Sitting Room", "Echo Dot-QNV", "2C:71:FF:65:15:B6"),
+            new PhoneStatusSpeaker("Bedroom", "Echo Dot-QCK", "2C:71:FF:74:F0:A3"),
+            new PhoneStatusSpeaker("Office", "Echo Dot-W4Q", "FC:A1:83:AC:E8:DD"),
+            new PhoneStatusSpeaker("Kitchen", "Echo Dot-JAC", "08:A6:BC:88:CA:64"),
+            new PhoneStatusSpeaker("Conservatory", "Echo Dot-HSS", "4C:17:44:8F:15:C9"),
+            new PhoneStatusSpeaker("Bose Headphones", "LE-Bose QC35 II", "2C:41:A1:C3:42:FA")
+    };
 
     private void pollAndroidPlayerJobForLogOnly() {
         new Thread(() -> {
